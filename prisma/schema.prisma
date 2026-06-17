@@ -1,0 +1,521 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  CLINICIAN
+  PATIENT
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum LabResultStatus {
+  PENDING
+  RECEIVED
+  REVIEWED
+  FLAGGED
+  ARCHIVED
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum TreatmentPlanStatus {
+  DRAFT
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum ConsentStatus {
+  PENDING
+  SIGNED
+  DECLINED
+  EXPIRED
+}
+
+enum MessageStatus {
+  UNREAD
+  READ
+  ARCHIVED
+}
+
+enum ActivityType {
+  LOGIN
+  LOGOUT
+  PROFILE_UPDATE
+  LAB_UPLOAD
+  LAB_VIEWED
+  ORDER_CREATED
+  ORDER_PAID
+  TREATMENT_PLAN_CREATED
+  TREATMENT_PLAN_UPDATED
+  CONSENT_SIGNED
+  FILE_UPLOADED
+  FILE_DOWNLOADED
+  MESSAGE_SENT
+  PASSWORD_CHANGED
+  ADMIN_ACTION
+}
+
+// ─── User & Authentication ────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  emailVerified  DateTime?
+  name           String?
+  passwordHash   String?
+  role           Role      @default(PATIENT)
+  image          String?
+  phone          String?
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  patient        Patient?
+  adminActions   ActivityLog[] @relation("AdminActions")
+  activities     ActivityLog[] @relation("UserActivities")
+  sentMessages   Message[]     @relation("SentMessages")
+  receivedMessages Message[]   @relation("ReceivedMessages")
+
+  @@index([email])
+  @@index([role])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Patient ──────────────────────────────────────────────────────────────────
+
+model Patient {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  dateOfBirth     DateTime?
+  gender          Gender?
+  bloodType       String?
+  height          Float?    // in cm
+  weight          Float?    // in kg
+  address         String?
+  city            String?
+  state           String?
+  zip             String?
+  country         String?   @default("US")
+  emergencyName   String?
+  emergencyPhone  String?
+  primaryPhysician String?
+  insuranceProvider String?
+  insuranceId     String?
+  medicalHistory  String?   @db.Text
+  allergies       String?   @db.Text
+  currentMedications String? @db.Text
+  notes           String?   @db.Text
+  stripeCustomerId String?  @unique
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  labResults      LabResult[]
+  treatmentPlans  TreatmentPlan[]
+  orders          Order[]
+  consentForms    ConsentForm[]
+  documents       PatientDocument[]
+  appointments    Appointment[]
+  recommendations Recommendation[]
+
+  @@index([userId])
+  @@index([stripeCustomerId])
+}
+
+// ─── Lab Results ──────────────────────────────────────────────────────────────
+
+model LabResult {
+  id           String          @id @default(cuid())
+  patientId    String
+  uploadedById String
+  labName      String
+  testName     String
+  collectedAt  DateTime?
+  receivedAt   DateTime?
+  status       LabResultStatus @default(PENDING)
+  notes        String?         @db.Text
+  flagged      Boolean         @default(false)
+  flagReason   String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  files        LabFile[]
+  biomarkers   Biomarker[]
+
+  @@index([patientId])
+  @@index([status])
+  @@index([collectedAt])
+}
+
+model LabFile {
+  id          String   @id @default(cuid())
+  labResultId String
+  fileName    String
+  fileKey     String   // storage key (S3/Supabase path)
+  fileUrl     String   @db.Text
+  fileSize    Int
+  mimeType    String
+  uploadedAt  DateTime @default(now())
+
+  labResult   LabResult @relation(fields: [labResultId], references: [id], onDelete: Cascade)
+
+  @@index([labResultId])
+}
+
+model Biomarker {
+  id          String    @id @default(cuid())
+  labResultId String
+  name        String
+  value       Float?
+  unit        String?
+  referenceMin Float?
+  referenceMax Float?
+  isInRange   Boolean?
+  notes       String?
+
+  labResult   LabResult @relation(fields: [labResultId], references: [id], onDelete: Cascade)
+
+  @@index([labResultId])
+}
+
+// ─── Treatment Plans ──────────────────────────────────────────────────────────
+
+model TreatmentPlan {
+  id           String              @id @default(cuid())
+  patientId    String
+  createdById  String
+  title        String
+  description  String?             @db.Text
+  goals        String?             @db.Text
+  startDate    DateTime?
+  endDate      DateTime?
+  status       TreatmentPlanStatus @default(DRAFT)
+  version      Int                 @default(1)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  patient      Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  items        TreatmentItem[]
+
+  @@index([patientId])
+  @@index([status])
+}
+
+model TreatmentItem {
+  id              String   @id @default(cuid())
+  treatmentPlanId String
+  category        String   // e.g. "Supplement", "Lifestyle", "Medication", "Lab Test"
+  name            String
+  description     String?  @db.Text
+  dosage          String?
+  frequency       String?
+  duration        String?
+  instructions    String?  @db.Text
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  treatmentPlan TreatmentPlan @relation(fields: [treatmentPlanId], references: [id], onDelete: Cascade)
+
+  @@index([treatmentPlanId])
+}
+
+// ─── Recommendations / Products ───────────────────────────────────────────────
+
+model Recommendation {
+  id          String   @id @default(cuid())
+  patientId   String
+  createdById String
+  title       String
+  description String?  @db.Text
+  type        String   // "product", "protocol", "lifestyle", "supplement"
+  products    RecommendedProduct[]
+  notes       String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+model RecommendedProduct {
+  id               String  @id @default(cuid())
+  recommendationId String
+  productName      String
+  brand            String?
+  sku              String?
+  quantity         Int     @default(1)
+  dosage           String?
+  instructions     String? @db.Text
+  stripeProductId  String?
+  stripePriceId    String?
+  unitPrice        Float?
+  imageUrl         String?
+  productUrl       String?
+  sortOrder        Int     @default(0)
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+}
+
+// ─── Orders & Payments ────────────────────────────────────────────────────────
+
+model Order {
+  id                    String      @id @default(cuid())
+  patientId             String
+  createdById           String
+  status                OrderStatus @default(DRAFT)
+  subtotal              Float
+  tax                   Float       @default(0)
+  discount              Float       @default(0)
+  total                 Float
+  currency              String      @default("usd")
+  stripePaymentIntentId String?     @unique
+  stripeSessionId       String?     @unique
+  stripePaymentLinkId   String?
+  stripePaymentLinkUrl  String?     @db.Text
+  paidAt                DateTime?
+  shippingName          String?
+  shippingAddress       String?
+  shippingCity          String?
+  shippingState         String?
+  shippingZip           String?
+  shippingCountry       String?
+  trackingNumber        String?
+  notes                 String?     @db.Text
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  patient    Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  items      OrderItem[]
+
+  @@index([patientId])
+  @@index([status])
+  @@index([stripePaymentIntentId])
+  @@index([stripeSessionId])
+}
+
+model OrderItem {
+  id             String  @id @default(cuid())
+  orderId        String
+  productName    String
+  sku            String?
+  quantity       Int
+  unitPrice      Float
+  subtotal       Float
+  stripeProductId String?
+  stripePriceId  String?
+  metadata       Json?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+// ─── Consent Forms ────────────────────────────────────────────────────────────
+
+model ConsentForm {
+  id          String        @id @default(cuid())
+  patientId   String
+  templateId  String?
+  title       String
+  description String?       @db.Text
+  content     String        @db.Text
+  version     String        @default("1.0")
+  status      ConsentStatus @default(PENDING)
+  signedAt    DateTime?
+  ipAddress   String?
+  userAgent   String?
+  signatureData String?     @db.Text // base64 or typed sig
+  expiresAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  patient     Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([status])
+}
+
+// ─── Patient Documents ────────────────────────────────────────────────────────
+
+model PatientDocument {
+  id          String   @id @default(cuid())
+  patientId   String
+  uploadedById String
+  fileName    String
+  fileKey     String
+  fileUrl     String   @db.Text
+  fileSize    Int
+  mimeType    String
+  category    String?  // "insurance", "referral", "intake", "other"
+  description String?
+  uploadedAt  DateTime @default(now())
+
+  patient     Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([category])
+}
+
+// ─── Appointments ─────────────────────────────────────────────────────────────
+
+model Appointment {
+  id           String   @id @default(cuid())
+  patientId    String
+  scheduledById String
+  title        String
+  description  String?
+  appointmentDate DateTime
+  duration     Int      @default(30) // minutes
+  location     String?
+  isVirtual    Boolean  @default(false)
+  meetingUrl   String?
+  status       String   @default("SCHEDULED") // SCHEDULED, CONFIRMED, CANCELLED, COMPLETED
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([appointmentDate])
+  @@index([status])
+}
+
+// ─── Messaging ────────────────────────────────────────────────────────────────
+
+model Message {
+  id          String        @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  subject     String?
+  body        String        @db.Text
+  status      MessageStatus @default(UNREAD)
+  parentId    String?
+  readAt      DateTime?
+  createdAt   DateTime      @default(now())
+
+  from        User     @relation("SentMessages", fields: [fromUserId], references: [id], onDelete: Cascade)
+  to          User     @relation("ReceivedMessages", fields: [toUserId], references: [id], onDelete: Cascade)
+  parent      Message? @relation("MessageThread", fields: [parentId], references: [id])
+  replies     Message[] @relation("MessageThread")
+
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@index([status])
+  @@index([parentId])
+}
+
+// ─── Activity Log ─────────────────────────────────────────────────────────────
+
+model ActivityLog {
+  id          String       @id @default(cuid())
+  userId      String
+  adminId     String?
+  type        ActivityType
+  description String
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime     @default(now())
+
+  user        User  @relation("UserActivities", fields: [userId], references: [id], onDelete: Cascade)
+  admin       User? @relation("AdminActions", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([adminId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ─── Announcements / Notifications ───────────────────────────────────────────
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  body        String
+  link        String?
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
